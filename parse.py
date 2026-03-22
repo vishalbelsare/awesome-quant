@@ -1,23 +1,32 @@
-
-
 import os
 import re
 import pandas as pd
 from threading import Thread
 
-from github import Github
+from github import Auth, Github
 
 # using an access token
-g = Github(os.environ['GITHUB_ACCESS_TOKEN'])
+auth = Auth.Token(os.environ["GITHUB_ACCESS_TOKEN"])
+g = Github(auth=auth)
 
 
 def extract_repo(url):
-    reu = re.compile('^https://github.com/([\w-]+/[-\w\.]+)$')
+    reu = re.compile(r"^https://github.com/([\w-]+/[-\w\.]+)$")
     m = reu.match(url)
     if m:
         return m.group(1)
     else:
-        return ''
+        return ""
+
+
+def extract_github_url(description):
+    """Extract GitHub URL from description if present."""
+    # Look for [GitHub](https://github.com/...) pattern
+    github_pattern = re.compile(r"\[GitHub\]\((https://github\.com/[\w-]+/[-\w\.]+)\)")
+    m = github_pattern.search(description)
+    if m:
+        return m.group(1)
+    return ""
 
 
 def get_last_commit(repo):
@@ -25,16 +34,15 @@ def get_last_commit(repo):
         if repo:
             r = g.get_repo(repo)
             cs = r.get_commits()
-            return cs[0].commit.author.date.strftime('%Y-%m-%d')
+            return cs[0].commit.author.date.strftime("%Y-%m-%d")
         else:
-            return ''
+            return ""
     except:
-        print('ERROR ' + repo)
-        return 'error'
+        print("ERROR " + repo)
+        return "error"
 
 
 class Project(Thread):
-
     def __init__(self, match, section):
         super().__init__()
         self._match = match
@@ -43,34 +51,46 @@ class Project(Thread):
 
     def run(self):
         m = self._match
-        is_github = 'github.com' in m.group(2)
-        is_cran = 'cran.r-project.org' in m.group(2)
-        repo = extract_repo(m.group(2))
+        primary_url = m.group(2)
+        description = m.group(3)
+
+        # Check if primary URL is GitHub
+        is_github = "github.com" in primary_url
+
+        # If not GitHub, check if there's a GitHub link in the description
+        github_url = ""
+        if not is_github:
+            github_url = extract_github_url(description)
+        else:
+            github_url = primary_url
+
+        is_cran = "cran.r-project.org" in primary_url
+        repo = extract_repo(github_url)
         print(repo)
         last_commit = get_last_commit(repo)
         self.regs = dict(
             project=m.group(1),
             section=self._section,
             last_commit=last_commit,
-            url=m.group(2),
-            description=m.group(3),
-            github=is_github,
+            url=primary_url,
+            description=description,
+            github=is_github or bool(github_url),
             cran=is_cran,
-            repo=repo
+            repo=repo,
         )
 
 
 projects = []
 
-with open('README.md', 'r', encoding='utf8') as f:
-    ret = re.compile('^(#+) (.*)$')
-    rex = re.compile('^\s*- \[(.*)\]\((.*)\) - (.*)$')
+with open("README.md", "r", encoding="utf8") as f:
+    ret = re.compile(r"^(#+) (.*)$")
+    rex = re.compile(r"^\s*- \[(.*)\]\((.*)\) - (.*)$")
     m_titles = []
     last_head_level = 0
     for line in f:
         m = rex.match(line)
         if m:
-            p = Project(m, ' > '.join(m_titles[1:]))
+            p = Project(m, " > ".join(m_titles[1:]))
             p.start()
             projects.append(p)
         else:
@@ -92,5 +112,5 @@ while True:
 
 projects = [p.regs for p in projects]
 df = pd.DataFrame(projects)
-df.to_csv('projects.csv', index=False)
+df.to_csv("site/projects.csv", index=False)
 # df.to_markdown('projects.md', index=False)
